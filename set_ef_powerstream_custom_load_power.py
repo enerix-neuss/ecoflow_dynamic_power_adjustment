@@ -39,7 +39,14 @@ def get_qstr(params):
 def call_api(method, url, key, secret, params=None):
     nonce = str(random.randint(100000, 999999))
     timestamp = str(int(time.time() * 1000))
-    headers = {'accessKey': key, 'nonce': nonce, 'timestamp': timestamp}
+    
+    # WICHTIG: Korrekte Header-Struktur für die offizielle Open API
+    headers = {
+        'accessKey': key,
+        'nonce': nonce,
+        'timestamp': timestamp,
+        'Content-Type': 'application/json'
+    }
     
     sign_str = (get_qstr(get_map(params)) + '&' if params else '') + get_qstr(headers)
     headers['sign'] = hmac_sha256(sign_str, secret)
@@ -56,10 +63,10 @@ def call_api(method, url, key, secret, params=None):
             try:
                 return response.json()
             except Exception:
-                print(f"API lieferte kein gültiges JSON. Text-Vorschau: {response.text[:200]}")
+                print(f"API lieferte kein gültiges JSON. Text-Vorschau: {response.text[:150]}")
                 return None
         else:
-            print(f"API Fehler (Status {response.status_code}): {response.text[:200]}")
+            print(f"API Fehler (Status {response.status_code}): {response.text[:150]}")
             return None
     except Exception as e:
         print(f"Netzwerkfehler bei API-Aufruf: {e}")
@@ -82,7 +89,7 @@ if __name__ == "__main__":
     print(" Smart-Delay EcoFlow-Nulleinspeisung Aktiviert ")
     print("==================================================")
     
-    # KORREKTUR: Die echte, offizielle Entwickler-Route (Open API) von EcoFlow
+    # Korrekte globale URL für offizielle Entwickler-Accounts
     url_quota = 'https://ecoflow.com'
 
     letzte_berechnete_einspeisung = -1
@@ -91,78 +98,77 @@ if __name__ == "__main__":
 
     while True:
         try:
-            # 1. Aktuellen Hausverbrauch vom EcoFlow Smart Meter abfragen
+            # 1. Hausverbrauch abfragen
             sm_params = {"sn": sm_serial, "quotas": ["20_1.sumInWatts"]}
             sm_payload = call_api('POST', url_quota, access_key, secret_key, sm_params)
             
-            if sm_payload and 'data' in sm_payload:
-                data_block = sm_payload['data']
-                val = data_block.get('20_1.sumInWatts') or data_block.get('20_1', {}).get('sumInWatts')
-                
-                if val is not None:
-                    haus_verbrauch = round(float(val))
-                    print(f"Hausverbrauch aktuell: {haus_verbrauch} W")
+            if sm_payload:
+                if 'data' in sm_payload:
+                    data_block = sm_payload['data']
+                    val = data_block.get('20_1.sumInWatts') or data_block.get('20_1', {}).get('sumInWatts')
                     
-                    # 2. Aktuelle Einspeisung des PowerStreams abfragen
-                    ps_params = {"sn": ps_serial, "quotas": ["20_1.permanentWatts"]}
-                    ps_payload = call_api('POST', url_quota, access_key, secret_key, ps_params)
-                    
-                    if ps_payload and 'data' in ps_payload:
-                        ps_data = ps_payload['data']
-                        ps_val = ps_data.get('20_1.permanentWatts') or ps_data.get('20_1', {}).get('permanentWatts')
+                    if val is not None:
+                        haus_verbrauch = round(float(val))
+                        print(f"Hausverbrauch aktuell: {haus_verbrauch} W")
                         
-                        if ps_val is not None:
-                            aktuelle_einspeisung = float(ps_val)
-                            if aktuelle_einspeisung > 2000:
-                                aktuelle_einspeisung = aktuelle_einspeisung / 10
-                            aktuelle_einspeisung = round(aktuelle_einspeisung)
+                        # 2. Aktuelle Einspeisung abfragen
+                        ps_params = {"sn": ps_serial, "quotas": ["20_1.permanentWatts"]}
+                        ps_payload = call_api('POST', url_quota, access_key, secret_key, ps_params)
+                        
+                        if ps_payload and 'data' in ps_payload:
+                            ps_data = ps_payload['data']
+                            ps_val = ps_data.get('20_1.permanentWatts') or ps_data.get('20_1', {}).get('permanentWatts')
                             
-                            if letzte_berechnete_einspeisung == -1:
-                                letzte_berechnete_einspeisung = aktuelle_einspeisung
-
-                            # 3. Neue benötigte Leistung berechnen
-                            ziel_einspeisung = aktuelle_einspeisung + haus_verbrauch + offset
-                            
-                            if ziel_einspeisung < 0: ziel_einspeisung = 0
-                            if ziel_einspeisung > 800: ziel_einspeisung = 800
-                            
-                            # --- PEAK-FILTER ---
-                            if ziel_einspeisung < letzte_berechnete_einspeisung:
-                                hochregel_zaehler = 0
-                                letzte_berechnete_einspeisung = ziel_einspeisung
-                                print(f"-> Last sinkt. Sofortige Anpassung geplant: {ziel_einspeisung} W")
-                            elif ziel_einspeisung > letzte_berechnete_einspeisung:
-                                hochregel_zaehler += 1
-                                print(f"-> Last steigt! Peak-Filter aktiv. (Sekunde {hochregel_zaehler}/{ERFORDERLICHE_ZYKLEN})")
+                            if ps_val is not None:
+                                aktuelle_einspeisung = float(ps_val)
+                                if aktuelle_einspeisung > 2000:
+                                    aktuelle_einspeisung = aktuelle_einspeisung / 10
+                                aktuelle_einspeisung = round(aktuelle_einspeisung)
                                 
-                                if hochregel_zaehler >= ERFORDERLICHE_ZYKLEN:
-                                    letzte_berechnete_einspeisung = ziel_einspeisung
-                                    print(f"   Last ist stabil! Erhöhe Einspeisung auf: {ziel_einspeisung} W")
-                                else:
-                                    print(f"   Kurzzeitiger Peak blockiert. Bleibe auf: {letzte_berechnete_einspeisung} W")
-                            else:
-                                hochregel_zaehler = 0
+                                if letzte_berechnete_einspeisung == -1:
+                                    letzte_berechnete_einspeisung = aktuelle_einspeisung
 
-                            # 4. Den neuen Wert an den PowerStream senden
-                            if letzte_berechnete_einspeisung != aktuelle_einspeisung:
-                                cmd_params = {
-                                    "sn": ps_serial,
-                                    "cmdCode": "WN511_SET_PERMANENT_WATTS_PACK",
-                                    "params": {"permanentWatts": int(letzte_berechnete_einspeisung * 10)}
-                                }
-                                call_api('PUT', url_quota, access_key, secret_key, cmd_params)
-                                print(f"====> BEFEHL GESENDET: PowerStream auf {letzte_berechnete_einspeisung} W angepasst.")
+                                ziel_einspeisung = aktuelle_einspeisung + haus_verbrauch + offset
+                                if ziel_einspeisung < 0: ziel_einspeisung = 0
+                                if ziel_einspeisung > 800: ziel_einspeisung = 800
+                                
+                                # --- PEAK-FILTER ---
+                                if ziel_einspeisung < letzte_berechnete_einspeisung:
+                                    hochregel_zaehler = 0
+                                    letzte_berechnete_einspeisung = ziel_einspeisung
+                                    print(f"-> Last sinkt. Sofortige Anpassung: {ziel_einspeisung} W")
+                                elif ziel_einspeisung > letzte_berechnete_einspeisung:
+                                    hochregel_zaehler += 1
+                                    print(f"-> Last steigt! Peak-Filter aktiv. (Sekunde {hochregel_zaehler}/{ERFORDERLICHE_ZYKLEN})")
+                                    if hochregel_zaehler >= ERFORDERLICHE_ZYKLEN:
+                                        letzte_berechnete_einspeisung = ziel_einspeisung
+                                        print(f"   Last stabil! Erhöhe auf: {ziel_einspeisung} W")
+                                    else:
+                                        print(f"   Peak blockiert. Bleibe auf: {letzte_berechnete_einspeisung} W")
+                                else:
+                                    hochregel_zaehler = 0
+
+                                # 4. Wert senden
+                                if letzte_berechnete_einspeisung != aktuelle_einspeisung:
+                                    cmd_params = {
+                                        "sn": ps_serial,
+                                        "cmdCode": "WN511_SET_PERMANENT_WATTS_PACK",
+                                        "params": {"permanentWatts": int(letzte_berechnete_einspeisung * 10)}
+                                    }
+                                    call_api('PUT', url_quota, access_key, secret_key, cmd_params)
+                                    print(f"====> BEFEHL GESENDET: PowerStream auf {letzte_berechnete_einspeisung} W angepasst.")
+                                else:
+                                    print("-> Keine Anpassung nötig.")
                             else:
-                                print("-> Keine Anpassung nötig (Leistung stabil).")
+                                print("Konnte permanentWatts-Wert nicht finden.")
                         else:
-                            print("Konnte permanentWatts-Wert in den PowerStream-Daten nicht finden.")
+                            print("Keine Antwort vom PowerStream.")
                     else:
-                        print("Keine gültigen Daten vom PowerStream empfangen.")
+                        print("Konnte sumInWatts-Wert nicht finden.")
                 else:
-                    print("Konnte sumInWatts-Wert in den Smart-Meter-Daten nicht finden.")
+                    print(f"API Fehler-Antwort: {sm_payload}")
             else:
-                # Falls die API antwortet, aber Fehler-Codes sendet, geben wir den Payload aus
-                print(f"API Fehler-Antwort: {sm_payload}")
+                print("Keine Antwort von der API erhalten.")
                 
         except Exception as e:
             print(f"Fehler im Regelkreis: {e}")
