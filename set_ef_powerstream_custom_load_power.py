@@ -11,6 +11,7 @@ import threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 def start_fake_server():
+    # Startet einen minimalistischen Webserver auf Port 10000, damit Render glücklich ist
     server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
     server.serve_forever()
 
@@ -57,12 +58,14 @@ def call_api(method, url, key, secret, params=None):
         else:
             return None
     except Exception as e:
-        print(f"Netzwerkfehler: {e}")
+        print(f"Netzwerkfehler bei API-Aufruf: {e}")
         return None
 
 if __name__ == "__main__":
+    # Fake-Server im Hintergrund starten, um Renders Port-Check zu bestehen
     threading.Thread(target=start_fake_server, daemon=True).start()
 
+    # Render zieht sich die echten Zugangsdaten aus Ihren Umgebungsvariablen
     access_key = os.getenv("ECOFLOW_ACCESS_KEY")
     secret_key = os.getenv("ECOFLOW_SECRET_KEY")
     ps_serial = os.getenv("POWERSTREAM_SERIAL")
@@ -70,85 +73,86 @@ if __name__ == "__main__":
     offset = int(os.getenv("POWER_OFFSET", "-15"))
 
     if not all([access_key, secret_key, ps_serial, sm_serial]):
-        print("FEHLER: Umgebungsvariablen unvollständig!")
+        print("FEHLER: Umgebungsvariablen auf Render nicht vollständig ausgefüllt!")
         sys.exit(1)
 
     print("==================================================")
     print(" Smart-Delay EcoFlow-Nulleinspeisung Aktiviert ")
     print("==================================================")
     
-    url_quota = 'https://api-e.ecoflow.com/iot-open/sign/device/quota'
+    url_quota = 'https://ecoflow.com'
 
-    # Variablen für die Stabilisierungs-Prüfung
+    # Variablen für die Stabilisierungs-Prüfung (Filter)
     letzte_berechnete_einspeisung = -1
     hochregel_zaehler = 0
-    ERFORDERLICHE_ZYKLEN = 3  # Wie viele Sekunden/Zyklen muss die hohe Last anliegen? (3 Sek bei sleep=1)
+    ERFORDERLICHE_ZYKLEN = 3  # Last muss mindestens 3 Sekunden stabil anstehen
 
     while True:
         try:
-            # 1. Hausverbrauch abfragen
+            # 1. Aktuellen Hausverbrauch vom EcoFlow Smart Meter abfragen
             sm_params = {"sn": sm_serial, "quotas": ["20_1.sumInWatts"]}
             sm_payload = call_api('POST', url_quota, access_key, secret_key, sm_params)
             
-            if sm_payload and 'data' in sm_payload and '20_1.wValue' in sm_payload['data']:
-                haus_verbrauch = round(sm_payload['data']['20_1.wValue'] / 10)
+            if sm_payload and 'data' in sm_payload and '20_1.sumInWatts' in sm_payload['data']:
+                # Die offizielle API liefert sumInWatts als glatte Wattzahl
+                haus_verbrauch = round(float(sm_payload['data']['20_1.sumInWatts']))
                 print(f"Hausverbrauch aktuell: {haus_verbrauch} W")
                 
-                # 2. Aktuelle Einspeisung abfragen
+                # 2. Aktuelle Einspeisung des PowerStreams abfragen
                 ps_params = {"sn": ps_serial, "quotas": ["20_1.permanentWatts"]}
                 ps_payload = call_api('POST', url_quota, access_key, secret_key, ps_params)
                 
                 if ps_payload and 'data' in ps_payload and '20_1.permanentWatts' in ps_payload['data']:
-                    aktuelle_einspeisung = round(ps_payload['data']['20_1.permanentWatts'] / 10)
+                    # PowerStream permanentWatts wird meistens in Zehntel-Watt geliefert (z.B. 1500 = 150W)
+                    aktuelle_einspeisung = round(float(ps_payload['data']['20_1.permanentWatts']) / 10)
                     
-                    # Falls beim ersten Start noch kein Wert vorliegt
                     if letzte_berechnete_einspeisung == -1:
                         letzte_berechnete_einspeisung = aktuelle_einspeisung
 
-                    # 3. Zielwert ermitteln
+                    # 3. Neue benötigte Leistung berechnen (inklusive Offset-Puffer)
                     ziel_einspeisung = aktuelle_einspeisung + haus_verbrauch + offset
+                    
+                    # Physikalische Grenzen des PowerStreams einhalten (0W - 800W)
                     if ziel_einspeisung < 0: ziel_einspeisung = 0
                     if ziel_einspeisung > 800: ziel_einspeisung = 800
                     
-                    # --- DIE NEUE INTELLIGENTE PRÜFUNG ---
+                    # --- DER INTELLIGENTE PEAK-FILTER ---
                     
                     # FALL A: Verbrauch fällt ab -> Sofort runterregeln (Keine Sekunde verschwenden!)
                     if ziel_einspeisung < letzte_berechnete_einspeisung:
-                        hochregel_zaehler = 0  # Zähler zurücksetzen
+                        hochregel_zaehler = 0
                         letzte_berechnete_einspeisung = ziel_einspeisung
-                        print(f"-> Verbrauch sinkt. Sofortige Anpassung geplant: {ziel_einspeisung} W")
+                        print(f"-> Last sinkt. Sofortige Anpassung geplant: {ziel_einspeisung} W")
                     
                     # FALL B: Verbrauch steigt -> Erst prüfen, ob es ein kurzer Peak ist
                     elif ziel_einspeisung > letzte_berechnete_einspeisung:
                         hochregel_zaehler += 1
-                        print(f"-> Verbrauch steigt! Peak-Filter aktiv. (Zyklus {hochregel_zaehler}/{ERFORDERLICHE_ZYKLEN})")
+                        print(f"-> Last steigt! Peak-Filter aktiv. (Sekunde {hochregel_zaehler}/{ERFORDERLICHE_ZYKLEN})")
                         
-                        # Erst wenn die Last lang genug stabil war, übernehmen wir den hohen Wert
                         if hochregel_zaehler >= ERFORDERLICHE_ZYKLEN:
                             letzte_berechnete_einspeisung = ziel_einspeisung
                             print(f"   Last ist stabil! Erhöhe Einspeisung auf: {ziel_einspeisung} W")
                         else:
-                            print(f"   Kurzzeitiger Peak ignoriert. Bleibe vorerst auf: {letzte_berechnete_einspeisung} W")
+                            print(f"   Kurzzeitiger Peak blockiert. Bleibe auf: {letzte_berechnete_einspeisung} W")
                     
                     else:
-                        # Verbrauch ist exakt gleich geblieben
                         hochregel_zaehler = 0
 
-                    # 4. Wert an den PowerStream senden (falls abweichend zum physisch eingestellten Wert)
+                    # 4. Den neuen Wert an den PowerStream senden, falls er vom aktuellen Wert abweicht
                     if letzte_berechnete_einspeisung != aktuelle_einspeisung:
                         cmd_params = {
                             "sn": ps_serial,
                             "cmdCode": "WN511_SET_PERMANENT_WATTS_PACK",
-                            "params": {"permanentWatts": letzte_berechnete_einspeisung * 10}
+                            "params": {"permanentWatts": int(letzte_berechnete_einspeisung * 10)}
                         }
                         call_api('PUT', url_quota, access_key, secret_key, cmd_params)
                         print(f"====> BEFEHL GESENDET: PowerStream auf {letzte_berechnete_einspeisung} W angepasst.")
                     else:
-                        print("-> Keine physische Änderung am PowerStream nötig.")
+                        print("-> Keine Anpassung nötig (Leistung stabil).")
             else:
-                print("Fehler beim Lesen des Smart Meters.")
+                print("Fehler beim Lesen des Smart Meters (Keine Daten empfangen).")
                 
         except Exception as e:
             print(f"Fehler im Regelkreis: {e}")
             
-        time.sleep(1)  # 1 Sekunde Schleifenzeit
+        time.sleep(1)  # 1 Sekunde Pause zwischen den Prüfungen
