@@ -40,7 +40,6 @@ def call_api(method, url, key, secret, params=None):
     nonce = str(random.randint(100000, 999999))
     timestamp = str(int(time.time() * 1000))
     
-    # WICHTIG: Korrekte Header-Struktur für die offizielle Open API
     headers = {
         'accessKey': key,
         'nonce': nonce,
@@ -55,7 +54,8 @@ def call_api(method, url, key, secret, params=None):
         if method == 'GET':
             response = requests.get(url, headers=headers, params=params)
         elif method == 'POST':
-            response = requests.post(url, headers=headers, json=params)
+            # Einige EcoFlow-API-Endpunkte erwarten Parameter in der URL statt im Body
+            response = requests.post(url, headers=headers, params=params)
         elif method == 'PUT':
             response = requests.put(url, headers=headers, json=params)
         
@@ -82,14 +82,14 @@ if __name__ == "__main__":
     offset = int(os.getenv("POWER_OFFSET", "-15"))
 
     if not all([access_key, secret_key, ps_serial, sm_serial]):
-        print("FEHLER: Umgebungsvariablen auf Render nicht vollständig ausgefüllt!")
+        print("FEHLER: Umgebungsvariablen unvollständig!")
         sys.exit(1)
 
     print("==================================================")
     print(" Smart-Delay EcoFlow-Nulleinspeisung Aktiviert ")
     print("==================================================")
     
-    # Korrekte globale URL für offizielle Entwickler-Accounts
+    # ALTERNATIVE: Die dedizierte IoT-Open-API-Route von EcoFlow
     url_quota = 'https://ecoflow.com'
 
     letzte_berechnete_einspeisung = -1
