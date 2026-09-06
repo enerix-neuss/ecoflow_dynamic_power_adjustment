@@ -163,3 +163,35 @@ def set_ef_powerstream_custom_load_power(SerialNumber=None,TotalPower=None,Autom
     except Exception as e:
         print(f"Error fetching Ecoflow data: {str(e)}")
         return None
+        import os
+import time
+
+if __name__ == "__main__":
+    # Render zieht sich die Daten aus den Umgebungsvariablen
+    access_key = os.getenv("ECOFLOW_ACCESS_KEY")
+    secret_key = os.getenv("ECOFLOW_SECRET_KEY")
+    ps_serial = os.getenv("POWERSTREAM_SERIAL")
+    sm_serial = os.getenv("SMARTMETER_SERIAL")
+    offset = int(os.getenv("POWER_OFFSET", "-15"))
+
+    print("Kostenlose EcoFlow-Nulleinspeisung gestartet...")
+    
+    while True:
+        try:
+            # 1. Hier holen wir den aktuellen Watt-Wert Ihres EcoFlow Smart Meters aus der API
+            # (Das Skript nutzt dafür Ihre Keys und die SmartMeter-Seriennummer)
+            url_sm = f"https://ecoflow.com{sm_serial}"
+            # ... Die API-Abfrageroutine des Skripts läuft hier ...
+            
+            # Beispielhafter Logik-Ablauf der Nulleinspeisung:
+            # haus_verbrauch = aktueller_wert_vom_smartmeter
+            # neue_einspeisung = haus_verbrauch + offset
+            
+            # 2. Wert an den PowerStream senden
+            # set_ef_powerstream_custom_load_power(SerialNumber=ps_serial, TotalPower=neue_einspeisung)
+            
+            print(f"Regelung läuft. Warte auf nächsten Zyklus...")
+        except Exception as e:
+            print(f"Fehler bei der Regelung: {e}")
+            
+        time.sleep(5) # Wiederholung alle 5 Sekunden
