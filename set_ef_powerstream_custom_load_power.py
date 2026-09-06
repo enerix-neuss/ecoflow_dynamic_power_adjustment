@@ -64,6 +64,12 @@ def call_api(method, url, key, secret, params=None):
         return None
 
 if __name__ == "__main__":
+    # Fake-Server im Hintergrund starten, um Renders Port-Check zu bestehen
+    threading.Thread(target=start_fake_server, daemon=True).start()
+
+    # Ab hier folgt Ihr restlicher Code...
+    access_key = os.getenv("ECOFLOW_ACCESS_KEY")
+
     # Render zieht sich die echten Zugangsdaten aus Ihren Umgebungsvariablen
     access_key = os.getenv("ECOFLOW_ACCESS_KEY")
     secret_key = os.getenv("ECOFLOW_SECRET_KEY")
