@@ -15,10 +15,6 @@ def start_fake_server():
     server.serve_forever()
 
 def flatten_dict_ecoflow(obj, pre=""):
-    """
-    Formatiert Daten exakt nach dem EcoFlow-Standard für die Signatur.
-    Wandelt Listen in 'name[0]' und Dictionaries in 'name.untername' um.
-    """
     result = {}
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -29,6 +25,19 @@ def flatten_dict_ecoflow(obj, pre=""):
     else:
         result[pre] = obj
     return result
+
+def generate_ecoflow_sign_v2(params, headers, secret_key):
+    flat_params = flatten_dict_ecoflow(params) if params else {}
+    
+    flat_params['accessKey'] = headers['accessKey']
+    flat_params['nonce'] = headers['nonce']
+    flat_params['timestamp'] = headers['timestamp']
+    
+    sorted_params = sorted(flat_params.items())
+    sign_str = "&".join([f"{k}={v}" for k, v in sorted_params])
+    
+    hashed = hmac.new(secret_key.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).digest()
+    return binascii.hexlify(hashed).decode('utf-8')
 
 def call_ecoflow_api_v2(url, method, payload, access_key, secret_key):
     nonce = str(random.randint(100000, 999999))
@@ -41,21 +50,7 @@ def call_ecoflow_api_v2(url, method, payload, access_key, secret_key):
         'Content-Type': 'application/json'
     }
     
-    # 1. Alle Parameter flachdrücken
-    flat_params = flatten_dict_ecoflow(payload) if payload else {}
-    
-    # 2. Header-Werte für die Signierung hinzufügen
-    flat_params['accessKey'] = access_key
-    flat_params['nonce'] = nonce
-    flat_params['timestamp'] = timestamp
-    
-    # 3. Alle Keys alphabetisch sortieren und den Signatur-String bauen
-    sorted_params = sorted(flat_params.items())
-    sign_str = "&".join([f"{k}={v}" for k, v in sorted_params])
-    
-    # 4. HMAC-SHA256 Verschlüsselung anwenden
-    hashed = hmac.new(secret_key.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).digest()
-    headers['sign'] = binascii.hexlify(hashed).decode('utf-8')
+    headers['sign'] = generate_ecoflow_sign_v2(payload, headers, secret_key)
     
     try:
         if method == 'POST':
@@ -75,7 +70,6 @@ def call_ecoflow_api_v2(url, method, payload, access_key, secret_key):
         return None
 
 if __name__ == "__main__":
-    # Fake-Server im Hintergrund für Render starten
     threading.Thread(target=start_fake_server, daemon=True).start()
 
     access_key = os.getenv("ECOFLOW_ACCESS_KEY")
@@ -92,7 +86,6 @@ if __name__ == "__main__":
     print(" Offizielle EcoFlow v2.0 Nulleinspeisung Aktiv ")
     print("==================================================")
     
-    # Offizieller v2.0 Endpunkt laut Entwicklerhandbuch
     url_quota = 'https://ecoflow.com'
 
     letzte_berechnete_einspeisung = -1
@@ -163,3 +156,11 @@ if __name__ == "__main__":
                     else:
                         print(f"Fehler bei PowerStream-Abfrage. API-Antwort: {ps_res}")
                 else:
+                    print("Konnte sumInWatts im Datensatz nicht finden.")
+            else:
+                print(f"API Fehler-Antwort: {sm_res}")
+                
+        except Exception as e:
+            print(f"Fehler im Regelkreis: {e}")
+            
+        time.sleep(1)
