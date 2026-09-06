@@ -51,13 +51,13 @@ def call_api(method, url, key, secret, params=None):
     headers['sign'] = hmac_sha256(sign_str, secret)
     
     try:
-        if method == 'GET':
-            response = requests.get(url, headers=headers, params=params)
-        elif method == 'POST':
-            # Einige EcoFlow-API-Endpunkte erwarten Parameter in der URL statt im Body
+        if method == 'POST':
+            # Wichtig: Die Quotas flach als URL-Parameter mitsenden, nicht im Body!
             response = requests.post(url, headers=headers, params=params)
         elif method == 'PUT':
             response = requests.put(url, headers=headers, json=params)
+        else:
+            response = requests.get(url, headers=headers, params=params)
         
         if response.status_code == 200:
             try:
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     print(" Smart-Delay EcoFlow-Nulleinspeisung Aktiviert ")
     print("==================================================")
     
-    # ALTERNATIVE: Die dedizierte IoT-Open-API-Route von EcoFlow
+    # DIE OFFIZIELLE EUROPÄISCHE ENTWICKLER-ROUTE
     url_quota = 'https://ecoflow.com'
 
     letzte_berechnete_einspeisung = -1
