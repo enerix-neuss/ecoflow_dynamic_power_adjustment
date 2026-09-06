@@ -15,11 +15,9 @@ def start_fake_server():
     server.serve_forever()
 
 def ecoflow_sign(params, headers, secret_key):
-    # 1. Alle Parameter alphabetisch sortieren und als Query-String aufbauen
     sorted_params = sorted(params.items()) if params else []
     query_str = "&".join([f"{k}={v}" for k, v in sorted_params])
     
-    # 2. Alle relevanten Header alphabetisch sortieren
     sign_headers = {
         'accessKey': headers['accessKey'],
         'nonce': headers['nonce'],
@@ -28,13 +26,11 @@ def ecoflow_sign(params, headers, secret_key):
     sorted_headers = sorted(sign_headers.items())
     header_str = "&".join([f"{k}={v}" for k, v in sorted_headers])
     
-    # 3. Offizieller EcoFlow Signatur-String: Erst Params, dann Header
     if query_str:
         final_sign_str = f"{query_str}&{header_str}"
     else:
         final_sign_str = header_str
         
-    # 4. HMAC-SHA256 Verschlüsselung
     hashed = hmac.new(secret_key.encode('utf-8'), final_sign_str.encode('utf-8'), hashlib.sha256).digest()
     return binascii.hexlify(hashed).decode('utf-8')
 
@@ -49,7 +45,6 @@ def call_ecoflow_api(url, method, params, access_key, secret_key):
         'Content-Type': 'application/json'
     }
     
-    # Signatur berechnen
     headers['sign'] = ecoflow_sign(params, headers, secret_key)
     
     try:
@@ -67,7 +62,7 @@ def call_ecoflow_api(url, method, params, access_key, secret_key):
         print(f"Netzwerkfehler: {e}")
         return None
 
- if __name__ == "__main__":
+if __name__ == "__main__":
     threading.Thread(target=start_fake_server, daemon=True).start()
 
     access_key = os.getenv("ECOFLOW_ACCESS_KEY")
@@ -84,9 +79,8 @@ def call_ecoflow_api(url, method, params, access_key, secret_key):
     print(" Offizielle EcoFlow API-Nulleinspeisung Aktiv ")
     print("==================================================")
     
-    # Offizielle Routen für europäische Accounts laut Dokumentation
-    url_all_quota = 'https://api-e.ecoflow.com/iot-open/sign/device/quota/all'
-    url_set = 'https://api-e.ecoflow.com/iot-open/sign/device/quota'
+    url_all_quota = 'https://ecoflow.com'
+    url_set = 'https://ecoflow.com'
 
     letzte_berechnete_einspeisung = -1
     hochregel_zaehler = 0
@@ -94,23 +88,19 @@ def call_ecoflow_api(url, method, params, access_key, secret_key):
 
     while True:
         try:
-            # 1. Alle Daten des Smart Meters über den stabilen GET-Endpunkt abfragen
             sm_res = call_ecoflow_api(url_all_quota, 'GET', {"sn": sm_serial}, access_key, secret_key)
             
             if sm_res and sm_res.get('code') == 0 and 'data' in sm_res:
                 data = sm_res['data']
-                # Die offizielle API nutzt bei /quota/all meistens flache Punkt-Strukturen
                 val = data.get('20_1.sumInWatts') or data.get('20_1.wValue')
                 
                 if val is not None:
                     haus_verbrauch = round(float(val))
-                    # Falls der Wert in Zehntel-Watt kommt (z.B. über 3000 bei 300W), runterrechnen
                     if haus_verbrauch > 2500:
                         haus_verbrauch = round(haus_verbrauch / 10)
                         
                     print(f"Hausverbrauch aktuell: {haus_verbrauch} W")
                     
-                    # 2. Daten des PowerStreams abfragen
                     ps_res = call_ecoflow_api(url_all_quota, 'GET', {"sn": ps_serial}, access_key, secret_key)
                     
                     if ps_res and ps_res.get('code') == 0 and 'data' in ps_res:
@@ -123,12 +113,10 @@ def call_ecoflow_api(url, method, params, access_key, secret_key):
                             if letzte_berechnete_einspeisung == -1:
                                 letzte_berechnete_einspeisung = aktuelle_einspeisung
 
-                            # 3. Nulleinspeisung berechnen
                             ziel_einspeisung = aktuelle_einspeisung + haus_verbrauch + offset
                             if ziel_einspeisung < 0: ziel_einspeisung = 0
                             if ziel_einspeisung > 800: ziel_einspeisung = 800
                             
-                            # --- PEAK-FILTER ---
                             if ziel_einspeisung < letzte_berechnete_einspeisung:
                                 hochregel_zaehler = 0
                                 letzte_berechnete_einspeisung = ziel_einspeisung
@@ -144,7 +132,6 @@ def call_ecoflow_api(url, method, params, access_key, secret_key):
                             else:
                                 hochregel_zaehler = 0
 
-                            # 4. Befehl senden, falls Abweichung vorliegt
                             if letzte_berechnete_einspeisung != aktuelle_einspeisung:
                                 cmd_params = {
                                     "sn": ps_serial,
