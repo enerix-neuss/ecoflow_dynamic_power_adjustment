@@ -14,65 +14,60 @@ def start_fake_server():
     server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-def hmac_sha256(data, key):
-    hashed = hmac.new(key.encode('utf-8'), data.encode('utf-8'), hashlib.sha256).digest()
-    sign = binascii.hexlify(hashed).decode('utf-8')
-    return sign
+def ecoflow_sign(params, headers, secret_key):
+    # 1. Alle Parameter alphabetisch sortieren und als Query-String aufbauen
+    sorted_params = sorted(params.items()) if params else []
+    query_str = "&".join([f"{k}={v}" for k, v in sorted_params])
+    
+    # 2. Alle relevanten Header alphabetisch sortieren
+    sign_headers = {
+        'accessKey': headers['accessKey'],
+        'nonce': headers['nonce'],
+        'timestamp': headers['timestamp']
+    }
+    sorted_headers = sorted(sign_headers.items())
+    header_str = "&".join([f"{k}={v}" for k, v in sorted_headers])
+    
+    # 3. Offizieller EcoFlow Signatur-String: Erst Params, dann Header
+    if query_str:
+        final_sign_str = f"{query_str}&{header_str}"
+    else:
+        final_sign_str = header_str
+        
+    # 4. HMAC-SHA256 Verschlüsselung
+    hashed = hmac.new(secret_key.encode('utf-8'), final_sign_str.encode('utf-8'), hashlib.sha256).digest()
+    return binascii.hexlify(hashed).decode('utf-8')
 
-def get_map(json_obj, prefix=""):
-    def flatten(obj, pre=""):
-        result = {}
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                result.update(flatten(v, f"{pre}.{k}" if pre else k))
-        elif isinstance(obj, list):
-            for i, item in enumerate(obj):
-                result.update(flatten(item, f"{pre}[{i}]"))
-        else: 
-            result[pre] = obj
-        return result
-    return flatten(json_obj, prefix)
-
-def get_qstr(params): 
-    return '&'.join([f"{key}={params[key]}" for key in sorted(params.keys())])
-
-def call_api(method, url, key, secret, params=None):
+def call_ecoflow_api(url, method, params, access_key, secret_key):
     nonce = str(random.randint(100000, 999999))
     timestamp = str(int(time.time() * 1000))
     
     headers = {
-        'accessKey': key,
+        'accessKey': access_key,
         'nonce': nonce,
         'timestamp': timestamp,
         'Content-Type': 'application/json'
     }
     
-    sign_str = (get_qstr(get_map(params)) + '&' if params else '') + get_qstr(headers)
-    headers['sign'] = hmac_sha256(sign_str, secret)
+    # Signatur berechnen
+    headers['sign'] = ecoflow_sign(params, headers, secret_key)
     
     try:
-        if method == 'POST':
-            # Wichtig: Die Quotas flach als URL-Parameter mitsenden, nicht im Body!
-            response = requests.post(url, headers=headers, params=params)
+        if method == 'GET':
+            res = requests.get(url, headers=headers, params=params)
         elif method == 'PUT':
-            response = requests.put(url, headers=headers, json=params)
-        else:
-            response = requests.get(url, headers=headers, params=params)
+            res = requests.put(url, headers=headers, json=params)
         
-        if response.status_code == 200:
-            try:
-                return response.json()
-            except Exception:
-                print(f"API lieferte kein gültiges JSON. Text-Vorschau: {response.text[:150]}")
-                return None
+        if res.status_code == 200:
+            return res.json()
         else:
-            print(f"API Fehler (Status {response.status_code}): {response.text[:150]}")
+            print(f"API Fehler (Status {res.status_code}): {res.text[:200]}")
             return None
     except Exception as e:
-        print(f"Netzwerkfehler bei API-Aufruf: {e}")
+        print(f"Netzwerkfehler: {e}")
         return None
 
-if __name__ == "__main__":
+ if __name__ == "__main__":
     threading.Thread(target=start_fake_server, daemon=True).start()
 
     access_key = os.getenv("ECOFLOW_ACCESS_KEY")
@@ -86,11 +81,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print("==================================================")
-    print(" Smart-Delay EcoFlow-Nulleinspeisung Aktiviert ")
+    print(" Offizielle EcoFlow API-Nulleinspeisung Aktiv ")
     print("==================================================")
     
-    # DIE OFFIZIELLE EUROPÄISCHE ENTWICKLER-ROUTE
-    url_quota = 'https://ecoflow.com'
+    # Offizielle Routen für europäische Accounts laut Dokumentation
+    url_all_quota = 'https://api-e.ecoflow.com/iot-open/sign/device/quota/all'
+    url_set = 'https://api-e.ecoflow.com/iot-open/sign/device/quota'
 
     letzte_berechnete_einspeisung = -1
     hochregel_zaehler = 0
@@ -98,77 +94,75 @@ if __name__ == "__main__":
 
     while True:
         try:
-            # 1. Hausverbrauch abfragen
-            sm_params = {"sn": sm_serial, "quotas": ["20_1.sumInWatts"]}
-            sm_payload = call_api('POST', url_quota, access_key, secret_key, sm_params)
+            # 1. Alle Daten des Smart Meters über den stabilen GET-Endpunkt abfragen
+            sm_res = call_ecoflow_api(url_all_quota, 'GET', {"sn": sm_serial}, access_key, secret_key)
             
-            if sm_payload:
-                if 'data' in sm_payload:
-                    data_block = sm_payload['data']
-                    val = data_block.get('20_1.sumInWatts') or data_block.get('20_1', {}).get('sumInWatts')
+            if sm_res and sm_res.get('code') == 0 and 'data' in sm_res:
+                data = sm_res['data']
+                # Die offizielle API nutzt bei /quota/all meistens flache Punkt-Strukturen
+                val = data.get('20_1.sumInWatts') or data.get('20_1.wValue')
+                
+                if val is not None:
+                    haus_verbrauch = round(float(val))
+                    # Falls der Wert in Zehntel-Watt kommt (z.B. über 3000 bei 300W), runterrechnen
+                    if haus_verbrauch > 2500:
+                        haus_verbrauch = round(haus_verbrauch / 10)
+                        
+                    print(f"Hausverbrauch aktuell: {haus_verbrauch} W")
                     
-                    if val is not None:
-                        haus_verbrauch = round(float(val))
-                        print(f"Hausverbrauch aktuell: {haus_verbrauch} W")
+                    # 2. Daten des PowerStreams abfragen
+                    ps_res = call_ecoflow_api(url_all_quota, 'GET', {"sn": ps_serial}, access_key, secret_key)
+                    
+                    if ps_res and ps_res.get('code') == 0 and 'data' in ps_res:
+                        ps_data = ps_res['data']
+                        ps_val = ps_data.get('20_1.permanentWatts')
                         
-                        # 2. Aktuelle Einspeisung abfragen
-                        ps_params = {"sn": ps_serial, "quotas": ["20_1.permanentWatts"]}
-                        ps_payload = call_api('POST', url_quota, access_key, secret_key, ps_params)
-                        
-                        if ps_payload and 'data' in ps_payload:
-                            ps_data = ps_payload['data']
-                            ps_val = ps_data.get('20_1.permanentWatts') or ps_data.get('20_1', {}).get('permanentWatts')
+                        if ps_val is not None:
+                            aktuelle_einspeisung = round(float(ps_val) / 10)
                             
-                            if ps_val is not None:
-                                aktuelle_einspeisung = float(ps_val)
-                                if aktuelle_einspeisung > 2000:
-                                    aktuelle_einspeisung = aktuelle_einspeisung / 10
-                                aktuelle_einspeisung = round(aktuelle_einspeisung)
-                                
-                                if letzte_berechnete_einspeisung == -1:
-                                    letzte_berechnete_einspeisung = aktuelle_einspeisung
+                            if letzte_berechnete_einspeisung == -1:
+                                letzte_berechnete_einspeisung = aktuelle_einspeisung
 
-                                ziel_einspeisung = aktuelle_einspeisung + haus_verbrauch + offset
-                                if ziel_einspeisung < 0: ziel_einspeisung = 0
-                                if ziel_einspeisung > 800: ziel_einspeisung = 800
-                                
-                                # --- PEAK-FILTER ---
-                                if ziel_einspeisung < letzte_berechnete_einspeisung:
-                                    hochregel_zaehler = 0
+                            # 3. Nulleinspeisung berechnen
+                            ziel_einspeisung = aktuelle_einspeisung + haus_verbrauch + offset
+                            if ziel_einspeisung < 0: ziel_einspeisung = 0
+                            if ziel_einspeisung > 800: ziel_einspeisung = 800
+                            
+                            # --- PEAK-FILTER ---
+                            if ziel_einspeisung < letzte_berechnete_einspeisung:
+                                hochregel_zaehler = 0
+                                letzte_berechnete_einspeisung = ziel_einspeisung
+                                print(f"-> Last sinkt. Sofortige Anpassung: {ziel_einspeisung} W")
+                            elif ziel_einspeisung > letzte_berechnete_einspeisung:
+                                hochregel_zaehler += 1
+                                print(f"-> Last steigt! Peak-Filter aktiv. (Sekunde {hochregel_zaehler}/{ERFORDERLICHE_ZYKLEN})")
+                                if hochregel_zaehler >= ERFORDERLICHE_ZYKLEN:
                                     letzte_berechnete_einspeisung = ziel_einspeisung
-                                    print(f"-> Last sinkt. Sofortige Anpassung: {ziel_einspeisung} W")
-                                elif ziel_einspeisung > letzte_berechnete_einspeisung:
-                                    hochregel_zaehler += 1
-                                    print(f"-> Last steigt! Peak-Filter aktiv. (Sekunde {hochregel_zaehler}/{ERFORDERLICHE_ZYKLEN})")
-                                    if hochregel_zaehler >= ERFORDERLICHE_ZYKLEN:
-                                        letzte_berechnete_einspeisung = ziel_einspeisung
-                                        print(f"   Last stabil! Erhöhe auf: {ziel_einspeisung} W")
-                                    else:
-                                        print(f"   Peak blockiert. Bleibe auf: {letzte_berechnete_einspeisung} W")
+                                    print(f"   Last stabil! Erhöhe auf: {ziel_einspeisung} W")
                                 else:
-                                    hochregel_zaehler = 0
-
-                                # 4. Wert senden
-                                if letzte_berechnete_einspeisung != aktuelle_einspeisung:
-                                    cmd_params = {
-                                        "sn": ps_serial,
-                                        "cmdCode": "WN511_SET_PERMANENT_WATTS_PACK",
-                                        "params": {"permanentWatts": int(letzte_berechnete_einspeisung * 10)}
-                                    }
-                                    call_api('PUT', url_quota, access_key, secret_key, cmd_params)
-                                    print(f"====> BEFEHL GESENDET: PowerStream auf {letzte_berechnete_einspeisung} W angepasst.")
-                                else:
-                                    print("-> Keine Anpassung nötig.")
+                                    print(f"   Peak blockiert. Bleibe auf: {letzte_berechnete_einspeisung} W")
                             else:
-                                print("Konnte permanentWatts-Wert nicht finden.")
+                                hochregel_zaehler = 0
+
+                            # 4. Befehl senden, falls Abweichung vorliegt
+                            if letzte_berechnete_einspeisung != aktuelle_einspeisung:
+                                cmd_params = {
+                                    "sn": ps_serial,
+                                    "cmdCode": "WN511_SET_PERMANENT_WATTS_PACK",
+                                    "params": {"permanentWatts": int(letzte_berechnete_einspeisung * 10)}
+                                }
+                                call_ecoflow_api(url_set, 'PUT', cmd_params, access_key, secret_key)
+                                print(f"====> BEFEHL GESENDET: PowerStream auf {letzte_berechnete_einspeisung} W.")
+                            else:
+                                print("-> Keine Anpassung nötig.")
                         else:
-                            print("Keine Antwort vom PowerStream.")
+                            print("Konnte permanentWatts im PowerStream nicht finden.")
                     else:
-                        print("Konnte sumInWatts-Wert nicht finden.")
+                        print(f"Fehler bei PowerStream-Abfrage: {ps_res}")
                 else:
-                    print(f"API Fehler-Antwort: {sm_payload}")
+                    print("Konnte Verbrauchswert im Smart Meter nicht finden.")
             else:
-                print("Keine Antwort von der API erhalten.")
+                print(f"API verweigert Zugriff oder Zähler offline. Rückgabe: {sm_res}")
                 
         except Exception as e:
             print(f"Fehler im Regelkreis: {e}")
