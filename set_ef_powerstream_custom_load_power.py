@@ -14,10 +14,8 @@ def start_fake_server():
     server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-def ecoflow_sign(params, headers, secret_key):
-    sorted_params = sorted(params.items()) if params else []
-    query_str = "&".join([f"{k}={v}" for k, v in sorted_params])
-    
+def ecoflow_sign(query_str, headers, secret_key):
+    # Alle relevanten Header für die Signatur alphabetisch sortieren
     sign_headers = {
         'accessKey': headers['accessKey'],
         'nonce': headers['nonce'],
@@ -26,6 +24,7 @@ def ecoflow_sign(params, headers, secret_key):
     sorted_headers = sorted(sign_headers.items())
     header_str = "&".join([f"{k}={v}" for k, v in sorted_headers])
     
+    # Der finale Signatur-String von EcoFlow verlangt: erst Parameter, dann Header
     if query_str:
         final_sign_str = f"{query_str}&{header_str}"
     else:
@@ -34,7 +33,7 @@ def ecoflow_sign(params, headers, secret_key):
     hashed = hmac.new(secret_key.encode('utf-8'), final_sign_str.encode('utf-8'), hashlib.sha256).digest()
     return binascii.hexlify(hashed).decode('utf-8')
 
-def call_ecoflow_api(url, method, params, access_key, secret_key):
+def call_ecoflow_api(base_url, method, params, access_key, secret_key):
     nonce = str(random.randint(100000, 999999))
     timestamp = str(int(time.time() * 1000))
     
@@ -45,18 +44,26 @@ def call_ecoflow_api(url, method, params, access_key, secret_key):
         'Content-Type': 'application/json'
     }
     
-    headers['sign'] = ecoflow_sign(params, headers, secret_key)
+    # 1. Parameter manuell sortieren und den Query-String festlegen
+    sorted_params = sorted(params.items()) if params else []
+    query_str = "&".join([f"{k}={v}" for k, v in sorted_params])
+    
+    # 2. Die Signatur basierend auf dem exakten Query-String berechnen
+    headers['sign'] = ecoflow_sign(query_str, headers, secret_key)
+    
+    # 3. Die URL manuell mit den Parametern zusammensetzen, um requests-Interferenzen zu vermeiden
+    full_url = f"{base_url}?{query_str}" if query_str else base_url
     
     try:
         if method == 'GET':
-            res = requests.get(url, headers=headers, params=params)
+            res = requests.get(full_url, headers=headers)
         elif method == 'PUT':
-            res = requests.put(url, headers=headers, json=params)
+            res = requests.put(base_url, headers=headers, json=params)
         
         if res.status_code == 200:
             return res.json()
         else:
-            print(f"API Fehler (Status {res.status_code}): {res.text[:200]}")
+            print(f"API Fehler (Status {res.status_code}): {res.text[:150]}")
             return None
     except Exception as e:
         print(f"Netzwerkfehler: {e}")
@@ -79,6 +86,7 @@ if __name__ == "__main__":
     print(" Offizielle EcoFlow API-Nulleinspeisung Aktiv ")
     print("==================================================")
     
+    # Offizielle europäische API-Routen
     url_all_quota = 'https://ecoflow.com'
     url_set = 'https://ecoflow.com'
 
@@ -88,10 +96,11 @@ if __name__ == "__main__":
 
     while True:
         try:
+            # 1. Alle Daten des Smart Meters abfragen
             sm_res = call_ecoflow_api(url_all_quota, 'GET', {"sn": sm_serial}, access_key, secret_key)
             
-            if sm_res and sm_res.get('code') == 0 and 'data' in sm_res:
-                data = sm_res['data']
+            if sm_res and sm_res.get('code') == "0" or (sm_res and sm_res.get('code') == 0):
+                data = sm_res.get('data', {})
                 val = data.get('20_1.sumInWatts') or data.get('20_1.wValue')
                 
                 if val is not None:
@@ -101,10 +110,11 @@ if __name__ == "__main__":
                         
                     print(f"Hausverbrauch aktuell: {haus_verbrauch} W")
                     
+                    # 2. Daten des PowerStreams abfragen
                     ps_res = call_ecoflow_api(url_all_quota, 'GET', {"sn": ps_serial}, access_key, secret_key)
                     
-                    if ps_res and ps_res.get('code') == 0 and 'data' in ps_res:
-                        ps_data = ps_res['data']
+                    if ps_res and ps_res.get('code') == 0 or (ps_res and ps_res.get('code') == "0"):
+                        ps_data = ps_res.get('data', {})
                         ps_val = ps_data.get('20_1.permanentWatts')
                         
                         if ps_val is not None:
@@ -113,10 +123,12 @@ if __name__ == "__main__":
                             if letzte_berechnete_einspeisung == -1:
                                 letzte_berechnete_einspeisung = aktuelle_einspeisung
 
+                            # 3. Nulleinspeisung berechnen
                             ziel_einspeisung = aktuelle_einspeisung + haus_verbrauch + offset
                             if ziel_einspeisung < 0: ziel_einspeisung = 0
                             if ziel_einspeisung > 800: ziel_einspeisung = 800
                             
+                            # --- PEAK-FILTER ---
                             if ziel_einspeisung < letzte_berechnete_einspeisung:
                                 hochregel_zaehler = 0
                                 letzte_berechnete_einspeisung = ziel_einspeisung
@@ -132,6 +144,7 @@ if __name__ == "__main__":
                             else:
                                 hochregel_zaehler = 0
 
+                            # 4. Befehl senden, falls Abweichung vorliegt
                             if letzte_berechnete_einspeisung != aktuelle_einspeisung:
                                 cmd_params = {
                                     "sn": ps_serial,
@@ -149,7 +162,7 @@ if __name__ == "__main__":
                 else:
                     print("Konnte Verbrauchswert im Smart Meter nicht finden.")
             else:
-                print(f"API verweigert Zugriff oder Zähler offline. Rückgabe: {sm_res}")
+                print(f"API Fehler oder Zugriff verweigert. Rückgabe: {sm_res}")
                 
         except Exception as e:
             print(f"Fehler im Regelkreis: {e}")
