@@ -87,7 +87,7 @@ if __name__ == "__main__":
     while True:
         try:
             # 1. Hausverbrauch abfragen
-           sm_params = {"sn": sm_serial, "quotas": ["20_1.sumInWatts"]}
+            sm_params = {"sn": sm_serial, "quotas": ["20_1.sumInWatts"]}
             sm_payload = call_api('POST', url_quota, access_key, secret_key, sm_params)
             
             if sm_payload and 'data' in sm_payload and '20_1.wValue' in sm_payload['data']:
