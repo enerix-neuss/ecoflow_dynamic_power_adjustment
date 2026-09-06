@@ -133,4 +133,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Fehler im Regelkreis: {e}")
             
-        time.sleep(5)  # Sicherheits-Pause, um Sperrung durch EcoFlow zu vermeiden
+        time.sleep(3)  # Sicherheits-Pause, um Sperrung durch EcoFlow zu vermeiden
