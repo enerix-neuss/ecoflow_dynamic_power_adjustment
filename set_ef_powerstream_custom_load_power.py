@@ -7,6 +7,9 @@ import hmac
 import random
 import time
 import binascii
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+
 
 def hmac_sha256(data, key):
     hashed = hmac.new(key.encode('utf-8'), data.encode('utf-8'), hashlib.sha256).digest()
