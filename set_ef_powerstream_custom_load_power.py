@@ -9,6 +9,11 @@ import time
 import binascii
 import threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
+def start_fake_server():
+    # Startet einen minimalistischen Webserver auf Port 10000, damit Render glücklich ist
+    server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
 
 
 def hmac_sha256(data, key):
