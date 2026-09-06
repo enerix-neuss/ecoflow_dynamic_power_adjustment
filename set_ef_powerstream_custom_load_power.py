@@ -11,7 +11,6 @@ import threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 def start_fake_server():
-    # Startet einen minimalistischen Webserver auf Port 10000, damit Render glücklich ist
     server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
     server.serve_forever()
 
@@ -103,7 +102,7 @@ if __name__ == "__main__":
                 ps_payload = call_api('POST', url_quota, access_key, secret_key, ps_params)
                 
                 if ps_payload and 'data' in ps_payload and '20_1.permanentWatts' in ps_payload['data']:
-                    # PowerStream permanentWatts wird meistens in Zehntel-Watt geliefert (z.B. 1500 = 150W)
+                    # PowerStream permanentWatts wird meistens in Zehntel-Watt geliefert
                     aktuelle_einspeisung = round(float(ps_payload['data']['20_1.permanentWatts']) / 10)
                     
                     if letzte_berechnete_einspeisung == -1:
@@ -118,7 +117,7 @@ if __name__ == "__main__":
                     
                     # --- DER INTELLIGENTE PEAK-FILTER ---
                     
-                    # FALL A: Verbrauch fällt ab -> Sofort runterregeln (Keine Sekunde verschwenden!)
+                    # FALL A: Verbrauch fällt ab -> Sofort runterregeln (Keine Sekunde verschenken!)
                     if ziel_einspeisung < letzte_berechnete_einspeisung:
                         hochregel_zaehler = 0
                         letzte_berechnete_einspeisung = ziel_einspeisung
@@ -155,4 +154,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Fehler im Regelkreis: {e}")
             
-        time.sleep(1)  # 1 Sekunde Pause zwischen den Prüfungen
+        time.sleep(1)
